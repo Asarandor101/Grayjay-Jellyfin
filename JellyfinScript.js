@@ -1,11 +1,18 @@
 /*
- * Jellyfin -> Grayjay experimental source, v6
+ * Jellyfin -> Grayjay experimental source, v7
  *
- * v6 fixes Grayjay PlatformID usage.
- * v5 authentication behavior is kept unchanged.
+ * Changes from v6:
+ * - Adds Jellyfin Primary images as Grayjay thumbnails.
+ * - Keeps the working v5/v6 Grayjay authentication flow.
+ *
+ * Note:
+ * Thumbnail URLs intentionally do NOT contain a Jellyfin access token.
+ * This avoids leaking a token into URLs/logs. We first test whether
+ * Grayjay's image loading path applies the stored source authentication.
  */
 
 const SERVER = "http://192.168.0.140:40215";
+const PLUGIN_ID = "b90eb605-50b0-4a8b-9fb8-8a755da10216";
 let USER = null;
 let CONFIG = null;
 
@@ -29,7 +36,9 @@ source.getHome = function(continuationToken) {
         "/Users/" + enc(USER.Id) + "/Items" +
         "?Recursive=true" +
         "&IncludeItemTypes=Movie,Episode" +
-        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,ParentIndexNumber,IndexNumber" +
+        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags" +
+        "&EnableImages=true" +
+        "&ImageTypeLimit=1" +
         "&SortBy=DateCreated" +
         "&SortOrder=Descending" +
         "&StartIndex=" + start +
@@ -48,7 +57,9 @@ source.search = function(query, type, order, filters) {
         "?Recursive=true" +
         "&IncludeItemTypes=Movie,Episode" +
         "&SearchTerm=" + enc(q) +
-        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,ParentIndexNumber,IndexNumber" +
+        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags" +
+        "&EnableImages=true" +
+        "&ImageTypeLimit=1" +
         "&Limit=80"
     );
 
@@ -65,7 +76,7 @@ source.getContentDetails = function(url) {
     const id = itemIdFromUrl(url);
     const item = apiJson(
         "/Users/" + enc(USER.Id) + "/Items/" + enc(id) +
-        "?Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,ParentIndexNumber,IndexNumber,Path"
+        "?Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,Path,ImageTags"
     );
 
     const mediaSources = item.MediaSources || [];
@@ -104,7 +115,7 @@ source.getContentDetails = function(url) {
     return new PlatformVideoDetails({
         id: platformId(item.Id),
         name: displayTitle(item),
-        thumbnails: new Thumbnails([]),
+        thumbnails: thumbnailsFor(item),
         author: authorLink(item),
         uploadDate: dateSeconds(item.PremiereDate || item.DateCreated),
         duration: ticksToSeconds(item.RunTimeTicks),
@@ -159,7 +170,7 @@ function platformId(itemId) {
     return new PlatformID(
         "Jellyfin",
         String(itemId || ""),
-        CONFIG && CONFIG.id ? CONFIG.id : "b90eb605-50b0-4a8b-9fb8-8a755da10216"
+        CONFIG && CONFIG.id ? CONFIG.id : PLUGIN_ID
     );
 }
 
@@ -173,6 +184,22 @@ function authorLink(item) {
         SERVER,
         ""
     );
+}
+
+function thumbnailsFor(item) {
+    if (!item || !item.Id)
+        return new Thumbnails([]);
+
+    const tag = item.ImageTags && item.ImageTags.Primary
+        ? "&tag=" + enc(item.ImageTags.Primary)
+        : "";
+
+    const base = SERVER + "/Items/" + enc(item.Id) + "/Images/Primary";
+
+    return new Thumbnails([
+        new Thumbnail(base + "?maxWidth=480&quality=85" + tag, 480),
+        new Thumbnail(base + "?maxWidth=960&quality=90" + tag, 960)
+    ]);
 }
 
 function toPager(data, start, limit) {
@@ -191,7 +218,7 @@ function toPlatformVideo(item) {
     return new PlatformVideo({
         id: platformId(item.Id),
         name: displayTitle(item),
-        thumbnails: new Thumbnails([]),
+        thumbnails: thumbnailsFor(item),
         author: authorLink(item),
         uploadDate: dateSeconds(item.PremiereDate || item.DateCreated),
         duration: ticksToSeconds(item.RunTimeTicks),

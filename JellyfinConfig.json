@@ -6,7 +6,7 @@
   "sourceUrl": "https://asarandor101.github.io/Grayjay-Jellyfin/JellyfinConfig.json",
   "repositoryUrl": "https://github.com/Asarandor101/Grayjay-Jellyfin",
   "scriptUrl": "./JellyfinScript.js",
-  "version": 5,
+  "version": 6,
   "iconUrl": "./JellyfinIcon.png",
   "id": "b90eb605-50b0-4a8b-9fb8-8a755da10216",
   "scriptSignature": "",

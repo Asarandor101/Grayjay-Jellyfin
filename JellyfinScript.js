@@ -1,22 +1,22 @@
 /*
- * Jellyfin -> Grayjay experimental source, v5
+ * Jellyfin -> Grayjay experimental source, v6
  *
- * v5 fixes authentication:
- * - Grayjay captures Jellyfin's Authorization header during login.
- * - API calls use Grayjay's authenticated HTTP client.
- * - The script deliberately does NOT set its own Authorization header,
- *   so it cannot overwrite the stored Jellyfin login header.
+ * v6 fixes Grayjay PlatformID usage.
+ * v5 authentication behavior is kept unchanged.
  */
 
 const SERVER = "http://192.168.0.140:40215";
 let USER = null;
+let CONFIG = null;
 
 source.enable = function(conf, settings, savedState) {
+    CONFIG = conf || {};
     USER = apiJson("/Users/Me");
 };
 
 source.disable = function() {
     USER = null;
+    CONFIG = null;
 };
 
 source.getHome = function(continuationToken) {
@@ -88,12 +88,6 @@ source.getContentDetails = function(url) {
             }
         }
 
-        /*
-         * NOTE:
-         * API authentication is fixed in v5.
-         * Playback URLs still do not carry Grayjay's authenticated headers.
-         * We will fix playback/download separately after Search/Home works.
-         */
         videoSources.push(new VideoUrlSource({
             width: width,
             height: height,
@@ -108,15 +102,10 @@ source.getContentDetails = function(url) {
     }
 
     return new PlatformVideoDetails({
-        id: item.Id,
+        id: platformId(item.Id),
         name: displayTitle(item),
         thumbnails: new Thumbnails([]),
-        author: new PlatformAuthorLink(
-            item.SeriesName || "Jellyfin",
-            SERVER,
-            SERVER,
-            ""
-        ),
+        author: authorLink(item),
         uploadDate: dateSeconds(item.PremiereDate || item.DateCreated),
         duration: ticksToSeconds(item.RunTimeTicks),
         viewCount: 0,
@@ -149,14 +138,6 @@ function ensureUser() {
 }
 
 function apiJson(path) {
-    /*
-     * IMPORTANT:
-     * useAuthClient=true makes Grayjay add the Authorization header
-     * captured during the Jellyfin login.
-     *
-     * Do not manually add Authorization here: doing so can overwrite
-     * the authenticated header and cause HTTP 401.
-     */
     const headers = {
         "Accept": "application/json"
     };
@@ -174,6 +155,26 @@ function apiJson(path) {
     return JSON.parse(res.body);
 }
 
+function platformId(itemId) {
+    return new PlatformID(
+        "Jellyfin",
+        String(itemId || ""),
+        CONFIG && CONFIG.id ? CONFIG.id : "b90eb605-50b0-4a8b-9fb8-8a755da10216"
+    );
+}
+
+function authorLink(item) {
+    const authorName = item.SeriesName || "Jellyfin";
+    const authorId = item.SeriesId || item.ParentId || "jellyfin";
+
+    return new PlatformAuthorLink(
+        platformId(authorId),
+        authorName,
+        SERVER,
+        ""
+    );
+}
+
 function toPager(data, start, limit) {
     const items = (data.Items || []).map(toPlatformVideo);
     const total = data.TotalRecordCount || (start + items.length);
@@ -188,15 +189,10 @@ function toPager(data, start, limit) {
 
 function toPlatformVideo(item) {
     return new PlatformVideo({
-        id: item.Id,
+        id: platformId(item.Id),
         name: displayTitle(item),
         thumbnails: new Thumbnails([]),
-        author: new PlatformAuthorLink(
-            item.SeriesName || "Jellyfin",
-            SERVER,
-            SERVER,
-            ""
-        ),
+        author: authorLink(item),
         uploadDate: dateSeconds(item.PremiereDate || item.DateCreated),
         duration: ticksToSeconds(item.RunTimeTicks),
         viewCount: 0,

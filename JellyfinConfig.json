@@ -1,0 +1,32 @@
+{
+  "name": "Jellyfin (Local)",
+  "description": "Experimental Grayjay source for a local Jellyfin server. Login is handled by Grayjay.",
+  "author": "Asarandor101",
+  "authorUrl": "https://github.com/Asarandor101",
+  "sourceUrl": "https://asarandor101.github.io/Grayjay-Jellyfin/JellyfinConfig.json",
+  "repositoryUrl": "https://github.com/Asarandor101/Grayjay-Jellyfin",
+  "scriptUrl": "./JellyfinScript.js",
+  "version": 5,
+  "iconUrl": "./JellyfinIcon.png",
+  "id": "b90eb605-50b0-4a8b-9fb8-8a755da10216",
+  "scriptSignature": "",
+  "scriptPublicKey": "",
+  "packages": [
+    "Http"
+  ],
+  "allowEval": false,
+  "allowUrls": [
+    "192.168.0.140"
+  ],
+  "authentication": {
+    "loginUrl": "http://192.168.0.140:40215",
+    "domainHeadersToFind": {
+      "192.168.0.140": [
+        "authorization"
+      ]
+    },
+    "allowedDomains": [
+      "192.168.0.140"
+    ]
+  }
+}

@@ -3,7 +3,7 @@
   "description": "Experimental Grayjay source for a local Jellyfin server. Movies, episodes, search and direct-play.",
   "author": "OpenAI-assisted prototype",
   "authorUrl": "",
-  "sourceUrl": "https://asarandor101.github.io/grayjay-jellyfin/JellyfinConfig.json",
+  "sourceUrl": "https://asarandor101.github.io/Grayjay-Jellyfin/JellyfinConfig.json",
   "scriptUrl": "./JellyfinScript.js",
   "version": 2,
   "iconUrl": "./JellyfinIcon.png",

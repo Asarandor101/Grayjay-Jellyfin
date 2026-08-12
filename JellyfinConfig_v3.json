@@ -1,0 +1,37 @@
+{
+  "name": "Jellyfin (Local)",
+  "description": "Experimental Grayjay source for a local Jellyfin server. Movies, episodes, search and direct-play.",
+  "author": "Asarandor101",
+  "authorUrl": "https://github.com/Asarandor101",
+  "sourceUrl": "https://asarandor101.github.io/Grayjay-Jellyfin/JellyfinConfig.json",
+  "repositoryUrl": "https://github.com/Asarandor101/Grayjay-Jellyfin",
+  "scriptUrl": "./JellyfinScript.js",
+  "version": 3,
+  "iconUrl": "./JellyfinIcon.png",
+  "id": "b90eb605-50b0-4a8b-9fb8-8a755da10216",
+  "scriptSignature": "",
+  "scriptPublicKey": "",
+  "packages": [
+    "Http"
+  ],
+  "allowEval": false,
+  "allowUrls": [
+    "everywhere"
+  ],
+  "settings": [
+    {
+      "variable": "serverUrl",
+      "name": "Jellyfin server URL",
+      "description": "Adresse deines Jellyfin-Servers im Heimnetz, z. B. http://192.168.0.140:40215",
+      "type": "Text",
+      "default": "http://192.168.0.140:40215"
+    },
+    {
+      "variable": "accessToken",
+      "name": "Jellyfin access token",
+      "description": "Jellyfin Benutzer-Access-Token. Nicht dein Passwort eingeben.",
+      "type": "Text",
+      "default": ""
+    }
+  ]
+}

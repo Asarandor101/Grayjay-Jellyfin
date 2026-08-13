@@ -1,5 +1,5 @@
 /*
- * Jellyfin -> Grayjay experimental source, v10
+ * Jellyfin -> Grayjay experimental source, v11
  *
  * Changes from v6:
  * - Adds Jellyfin Primary images as Grayjay thumbnails.
@@ -205,7 +205,7 @@ source.getChannelContents = function(url, type, order, filters, continuationToke
         );
 
         const seasons = (data.Items || []).map(function(item) {
-            return containerChannel(item, "season");
+            return seasonFeedItem(item);
         });
 
         const total = data.TotalRecordCount || (start + seasons.length);
@@ -257,9 +257,67 @@ function toMixedPager(data, start, limit) {
 
 function toMixedContent(item) {
     if (item && item.Type === "Series")
-        return containerChannel(item, "series");
+        return seriesFeedItem(item);
 
     return toPlatformVideo(item);
+}
+
+function seriesFeedItem(item) {
+    const id = String(item && item.Id ? item.Id : "");
+    const title = item && item.Name ? item.Name : "Untitled Series";
+    const seriesUrl = "jellyfin://series/" + id;
+
+    /*
+     * PlatformNestedMediaContent inherits PlatformContent, so Grayjay can
+     * safely place it in Home/Search ContentPagers.
+     *
+     * contentUrl points at our own Jellyfin channel URL. When opened,
+     * Grayjay resolves that URL back through this plugin's isChannelUrl().
+     */
+    return new PlatformNestedMediaContent({
+        id: platformId(id),
+        name: title,
+        thumbnails: thumbnailsFor(item),
+        author: new PlatformAuthorLink(
+            platformId(id),
+            "Jellyfin",
+            seriesUrl,
+            primaryImageUrl(item, 256)
+        ),
+        uploadDate: dateSeconds(item.PremiereDate || item.DateCreated),
+        url: seriesUrl,
+        contentUrl: seriesUrl,
+        contentName: title,
+        contentDescription: item && item.Overview ? item.Overview : "",
+        contentProvider: "Jellyfin",
+        contentThumbnails: thumbnailsFor(item)
+    });
+}
+
+
+function seasonFeedItem(item) {
+    const id = String(item && item.Id ? item.Id : "");
+    const title = item && item.Name ? item.Name : "Season";
+    const seasonUrl = "jellyfin://season/" + id;
+
+    return new PlatformNestedMediaContent({
+        id: platformId(id),
+        name: title,
+        thumbnails: thumbnailsFor(item),
+        author: new PlatformAuthorLink(
+            platformId(id),
+            "Jellyfin",
+            seasonUrl,
+            primaryImageUrl(item, 256)
+        ),
+        uploadDate: dateSeconds(item.PremiereDate || item.DateCreated),
+        url: seasonUrl,
+        contentUrl: seasonUrl,
+        contentName: title,
+        contentDescription: item && item.Overview ? item.Overview : "",
+        contentProvider: "Jellyfin",
+        contentThumbnails: thumbnailsFor(item)
+    });
 }
 
 function containerChannel(item, kind) {

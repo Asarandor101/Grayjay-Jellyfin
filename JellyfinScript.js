@@ -1,5 +1,5 @@
 /*
- * Jellyfin -> Grayjay experimental source, v12
+ * Jellyfin -> Grayjay experimental source, v13
  *
  * Changes from v6:
  * - Adds Jellyfin Primary images as Grayjay thumbnails.
@@ -35,7 +35,7 @@ source.getHome = function(continuationToken) {
     const data = apiJson(
         "/Users/" + enc(USER.Id) + "/Items" +
         "?Recursive=true" +
-        "&IncludeItemTypes=Movie,Series" +
+        "&IncludeItemTypes=Movie,Series,BoxSet" +
         "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags,ChildCount" +
         "&EnableImages=true" +
         "&ImageTypeLimit=1" +
@@ -56,7 +56,7 @@ source.search = function(query, type, order, filters) {
     const data = apiJson(
         "/Users/" + enc(USER.Id) + "/Items" +
         "?Recursive=true" +
-        "&IncludeItemTypes=Movie,Series" +
+        "&IncludeItemTypes=Movie,Series,BoxSet" +
         "&SearchTerm=" + enc(q) +
         "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags,ChildCount" +
         "&EnableImages=true" +
@@ -160,49 +160,85 @@ source.getHomeCapabilities = function() {
  */
 
 source.isPlaylistUrl = function(url) {
-    return /^jellyfin:\/\/series\/[A-Za-z0-9-]+$/.test(url || "");
+    return /^jellyfin:\/\/(series|boxset)\/[A-Za-z0-9-]+$/.test(url || "");
 };
 
 source.getPlaylist = function(url) {
     ensureUser();
 
-    const seriesId = seriesIdFromUrl(url);
+    const parsed = playlistRefFromUrl(url);
+    const itemId = parsed.id;
 
-    const series = apiJson(
-        "/Users/" + enc(USER.Id) + "/Items/" + enc(seriesId) +
+    const container = apiJson(
+        "/Users/" + enc(USER.Id) + "/Items/" + enc(itemId) +
         "?Fields=Overview,DateCreated,PremiereDate,ImageTags,ChildCount"
     );
 
+    if (parsed.kind === "series") {
+        const data = apiJson(
+            "/Users/" + enc(USER.Id) + "/Items" +
+            "?Recursive=true" +
+            "&ParentId=" + enc(itemId) +
+            "&IncludeItemTypes=Episode" +
+            "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags" +
+            "&EnableImages=true" +
+            "&ImageTypeLimit=1" +
+            "&SortBy=ParentIndexNumber,IndexNumber" +
+            "&SortOrder=Ascending" +
+            "&Limit=10000"
+        );
+
+        const episodes = (data.Items || []).map(toPlatformVideo);
+
+        return new PlatformPlaylistDetails({
+            id: platformId(itemId),
+            name: container.Name || "Jellyfin Series",
+            thumbnails: thumbnailsFor(container),
+            author: new PlatformAuthorLink(
+                platformId(itemId),
+                "Jellyfin",
+                SERVER,
+                primaryImageUrl(container, 256)
+            ),
+            uploadDate: dateSeconds(container.PremiereDate || container.DateCreated),
+            url: "jellyfin://series/" + itemId,
+            videoCount: episodes.length,
+            thumbnail: primaryImageUrl(container, 960),
+            contents: new ContentPager(episodes, false)
+        });
+    }
+
+    // Jellyfin BoxSet / Collection -> list its movies.
     const data = apiJson(
         "/Users/" + enc(USER.Id) + "/Items" +
         "?Recursive=true" +
-        "&ParentId=" + enc(seriesId) +
-        "&IncludeItemTypes=Episode" +
-        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags" +
+        "&ParentId=" + enc(itemId) +
+        "&IncludeItemTypes=Movie" +
+        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,ImageTags" +
         "&EnableImages=true" +
         "&ImageTypeLimit=1" +
-        "&SortBy=ParentIndexNumber,IndexNumber" +
+        "&SortBy=SortName" +
         "&SortOrder=Ascending" +
         "&Limit=10000"
     );
 
-    const episodes = (data.Items || []).map(toPlatformVideo);
+    const movies = (data.Items || []).map(toPlatformVideo);
 
     return new PlatformPlaylistDetails({
-        id: platformId(seriesId),
-        name: series.Name || "Jellyfin Series",
-        thumbnails: thumbnailsFor(series),
+        id: platformId(itemId),
+        name: container.Name || "Jellyfin Collection",
+        thumbnails: thumbnailsFor(container),
         author: new PlatformAuthorLink(
-            platformId(seriesId),
+            platformId(itemId),
             "Jellyfin",
             SERVER,
-            primaryImageUrl(series, 256)
+            primaryImageUrl(container, 256)
         ),
-        uploadDate: dateSeconds(series.PremiereDate || series.DateCreated),
-        url: "jellyfin://series/" + seriesId,
-        videoCount: episodes.length,
-        thumbnail: primaryImageUrl(series, 960),
-        contents: new ContentPager(episodes, false)
+        uploadDate: dateSeconds(container.PremiereDate || container.DateCreated),
+        url: "jellyfin://boxset/" + itemId,
+        videoCount: movies.length,
+        thumbnail: primaryImageUrl(container, 960),
+        contents: new ContentPager(movies, false)
     });
 };
 
@@ -222,7 +258,31 @@ function toMixedContent(item) {
     if (item && item.Type === "Series")
         return toSeriesPlaylist(item);
 
+    if (item && item.Type === "BoxSet")
+        return toBoxSetPlaylist(item);
+
     return toPlatformVideo(item);
+}
+
+
+function toBoxSetPlaylist(item) {
+    const id = String(item && item.Id ? item.Id : "");
+
+    return new PlatformPlaylist({
+        id: platformId(id),
+        name: item && item.Name ? item.Name : "Jellyfin Collection",
+        thumbnails: thumbnailsFor(item),
+        author: new PlatformAuthorLink(
+            platformId(id),
+            "Jellyfin",
+            SERVER,
+            primaryImageUrl(item, 256)
+        ),
+        uploadDate: dateSeconds(item.PremiereDate || item.DateCreated),
+        url: "jellyfin://boxset/" + id,
+        videoCount: item && item.ChildCount ? item.ChildCount : 0,
+        thumbnail: primaryImageUrl(item, 960)
+    });
 }
 
 function toSeriesPlaylist(item) {
@@ -245,13 +305,16 @@ function toSeriesPlaylist(item) {
     });
 }
 
-function seriesIdFromUrl(url) {
-    const m = /^jellyfin:\/\/series\/([A-Za-z0-9-]+)$/.exec(url || "");
+function playlistRefFromUrl(url) {
+    const m = /^jellyfin:\/\/(series|boxset)\/([A-Za-z0-9-]+)$/.exec(url || "");
 
     if (!m)
-        throw new ScriptException("Invalid Jellyfin series URL.");
+        throw new ScriptException("Invalid Jellyfin playlist URL.");
 
-    return m[1];
+    return {
+        kind: m[1],
+        id: m[2]
+    };
 }
 
 function primaryImageUrl(item, width) {

@@ -1,5 +1,5 @@
 /*
- * Jellyfin -> Grayjay experimental source, v9
+ * Jellyfin -> Grayjay experimental source, v10
  *
  * Changes from v6:
  * - Adds Jellyfin Primary images as Grayjay thumbnails.
@@ -36,7 +36,7 @@ source.getHome = function(continuationToken) {
         "/Users/" + enc(USER.Id) + "/Items" +
         "?Recursive=true" +
         "&IncludeItemTypes=Movie,Series" +
-        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags,ChildCount" +
+        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags,BackdropImageTags,ChildCount" +
         "&EnableImages=true" +
         "&ImageTypeLimit=1" +
         "&SortBy=DateCreated" +
@@ -58,13 +58,13 @@ source.search = function(query, type, order, filters) {
         "?Recursive=true" +
         "&IncludeItemTypes=Movie,Series" +
         "&SearchTerm=" + enc(q) +
-        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags,ChildCount" +
+        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags,BackdropImageTags,ChildCount" +
         "&EnableImages=true" +
         "&ImageTypeLimit=1" +
         "&Limit=80"
     );
 
-    return new ContentPager((data.Items || []).map(toPlatformContent), false);
+    return new ContentPager((data.Items || []).map(toMixedContent), false);
 };
 
 source.isContentDetailsUrl = function(url) {
@@ -130,7 +130,7 @@ source.getContentDetails = function(url) {
 
 source.getSearchCapabilities = function() {
     return {
-        types: [Type.Feed.Videos],
+        types: [Type.Feed.Mixed],
         sorts: [],
         filters: []
     };
@@ -138,11 +138,182 @@ source.getSearchCapabilities = function() {
 
 source.getHomeCapabilities = function() {
     return {
-        types: [Type.Feed.Videos],
+        types: [Type.Feed.Mixed],
         sorts: [],
         filters: []
     };
 };
+
+
+/*
+ * v10 SERIES NAVIGATION
+ *
+ * Series and seasons are represented as Grayjay channels instead of playlists.
+ * v9 showed that custom playlist URLs are resolved through Grayjay's playlist
+ * client path and therefore did not route back into this source.
+ *
+ * Channel URLs are explicitly supported by the Grayjay source API:
+ *   jellyfin://series/<seriesId>
+ *   jellyfin://season/<seasonId>
+ */
+
+source.isChannelUrl = function(url) {
+    return /^jellyfin:\/\/(series|season)\/[A-Za-z0-9-]+$/.test(url || "");
+};
+
+source.getChannel = function(url) {
+    ensureUser();
+
+    const parsed = parseContainerUrl(url);
+    const item = apiJson(
+        "/Users/" + enc(USER.Id) + "/Items/" + enc(parsed.id) +
+        "?Fields=Overview,DateCreated,PremiereDate,ImageTags,BackdropImageTags,IndexNumber,ChildCount"
+    );
+
+    return containerChannel(item, parsed.kind);
+};
+
+source.getChannelCapabilities = function() {
+    return {
+        types: [Type.Feed.Mixed],
+        sorts: [],
+        filters: []
+    };
+};
+
+source.getChannelContents = function(url, type, order, filters, continuationToken) {
+    ensureUser();
+
+    const parsed = parseContainerUrl(url);
+    const start = parseInt(continuationToken || "0");
+    const limit = 100;
+
+    if (parsed.kind === "series") {
+        // Only seasons are exposed here.
+        const data = apiJson(
+            "/Users/" + enc(USER.Id) + "/Items" +
+            "?ParentId=" + enc(parsed.id) +
+            "&Recursive=false" +
+            "&IncludeItemTypes=Season" +
+            "&Fields=Overview,DateCreated,PremiereDate,ImageTags,BackdropImageTags,IndexNumber,ChildCount" +
+            "&EnableImages=true" +
+            "&ImageTypeLimit=1" +
+            "&SortBy=IndexNumber" +
+            "&SortOrder=Ascending" +
+            "&StartIndex=" + start +
+            "&Limit=" + limit
+        );
+
+        const seasons = (data.Items || []).map(function(item) {
+            return containerChannel(item, "season");
+        });
+
+        const total = data.TotalRecordCount || (start + seasons.length);
+        const hasMore = start + seasons.length < total;
+        return new ContentPager(
+            seasons,
+            hasMore,
+            hasMore ? String(start + limit) : null
+        );
+    }
+
+    // A season exposes its episodes as normal playable Grayjay videos.
+    const data = apiJson(
+        "/Users/" + enc(USER.Id) + "/Items" +
+        "?ParentId=" + enc(parsed.id) +
+        "&Recursive=false" +
+        "&IncludeItemTypes=Episode" +
+        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags,BackdropImageTags" +
+        "&EnableImages=true" +
+        "&ImageTypeLimit=1" +
+        "&SortBy=IndexNumber" +
+        "&SortOrder=Ascending" +
+        "&StartIndex=" + start +
+        "&Limit=" + limit
+    );
+
+    const episodes = (data.Items || []).map(toPlatformVideo);
+    const total = data.TotalRecordCount || (start + episodes.length);
+    const hasMore = start + episodes.length < total;
+
+    return new ContentPager(
+        episodes,
+        hasMore,
+        hasMore ? String(start + limit) : null
+    );
+};
+
+function toMixedPager(data, start, limit) {
+    const items = (data.Items || []).map(toMixedContent);
+    const total = data.TotalRecordCount || (start + items.length);
+    const hasMore = start + items.length < total;
+
+    return new ContentPager(
+        items,
+        hasMore,
+        hasMore ? String(start + limit) : null
+    );
+}
+
+function toMixedContent(item) {
+    if (item && item.Type === "Series")
+        return containerChannel(item, "series");
+
+    return toPlatformVideo(item);
+}
+
+function containerChannel(item, kind) {
+    const id = String(item && item.Id ? item.Id : "");
+    const name = item && item.Name
+        ? item.Name
+        : (kind === "season" ? "Season" : "Series");
+
+    return new PlatformChannel({
+        id: platformId(id),
+        name: name,
+        thumbnail: primaryImageUrl(item, 640),
+        banner: backdropImageUrl(item, 1280),
+        subscribers: 0,
+        description: item && item.Overview ? item.Overview : "",
+        url: "jellyfin://" + kind + "/" + id,
+        urlAlternatives: [],
+        links: {}
+    });
+}
+
+function parseContainerUrl(url) {
+    const m = /^jellyfin:\/\/(series|season)\/([A-Za-z0-9-]+)$/.exec(url || "");
+
+    if (!m)
+        throw new ScriptException("Invalid Jellyfin series/season URL.");
+
+    return {
+        kind: m[1],
+        id: m[2]
+    };
+}
+
+function primaryImageUrl(item, width) {
+    if (!item || !item.Id)
+        return "";
+
+    const tag = item.ImageTags && item.ImageTags.Primary
+        ? "&tag=" + enc(item.ImageTags.Primary)
+        : "";
+
+    return SERVER + "/Items/" + enc(item.Id) +
+        "/Images/Primary?maxWidth=" + (width || 640) +
+        "&quality=90" + tag;
+}
+
+function backdropImageUrl(item, width) {
+    if (!item || !item.Id || !item.BackdropImageTags || item.BackdropImageTags.length === 0)
+        return primaryImageUrl(item, width || 1280);
+
+    return SERVER + "/Items/" + enc(item.Id) +
+        "/Images/Backdrop/0?maxWidth=" + (width || 1280) +
+        "&quality=90&tag=" + enc(item.BackdropImageTags[0]);
+}
 
 function ensureUser() {
     if (!USER)
@@ -201,57 +372,6 @@ function thumbnailsFor(item) {
         new Thumbnail(base + "?maxWidth=480&quality=85" + tag, 480),
         new Thumbnail(base + "?maxWidth=960&quality=90" + tag, 960)
     ]);
-}
-
-
-function toMixedPager(data, start, limit) {
-    const items = (data.Items || []).map(toPlatformContent);
-    const total = data.TotalRecordCount || (start + items.length);
-    const hasMore = start + items.length < total;
-
-    return new ContentPager(
-        items,
-        hasMore,
-        hasMore ? String(start + limit) : null
-    );
-}
-
-function toPlatformContent(item) {
-    if (item && item.Type === "Series")
-        return toPlatformSeries(item);
-
-    return toPlatformVideo(item);
-}
-
-function toPlatformSeries(item) {
-    return new PlatformPlaylist({
-        id: platformId(item.Id),
-        name: item.Name || "Untitled Series",
-        thumbnails: thumbnailsFor(item),
-        author: new PlatformAuthorLink(
-            platformId(item.Id),
-            "Jellyfin Series",
-            "jellyfin://series/" + item.Id,
-            ""
-        ),
-        uploadDate: dateSeconds(item.PremiereDate || item.DateCreated),
-        url: "jellyfin://series/" + item.Id,
-        videoCount: item.ChildCount || 0,
-        thumbnail: primaryImageUrl(item, 960)
-    });
-}
-
-function primaryImageUrl(item, width) {
-    if (!item || !item.Id)
-        return "";
-
-    const tag = item.ImageTags && item.ImageTags.Primary
-        ? "&tag=" + enc(item.ImageTags.Primary)
-        : "";
-
-    return SERVER + "/Items/" + enc(item.Id) +
-        "/Images/Primary?maxWidth=" + (width || 960) +
-        "&quality=90" + tag;
 }
 
 function toPager(data, start, limit) {

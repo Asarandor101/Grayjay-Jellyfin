@@ -1,5 +1,5 @@
 /*
- * Jellyfin -> Grayjay experimental source, v11
+ * Jellyfin -> Grayjay experimental source, v12
  *
  * Changes from v6:
  * - Adds Jellyfin Primary images as Grayjay thumbnails.
@@ -36,7 +36,7 @@ source.getHome = function(continuationToken) {
         "/Users/" + enc(USER.Id) + "/Items" +
         "?Recursive=true" +
         "&IncludeItemTypes=Movie,Series" +
-        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags,BackdropImageTags,ChildCount" +
+        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags,ChildCount" +
         "&EnableImages=true" +
         "&ImageTypeLimit=1" +
         "&SortBy=DateCreated" +
@@ -58,7 +58,7 @@ source.search = function(query, type, order, filters) {
         "?Recursive=true" +
         "&IncludeItemTypes=Movie,Series" +
         "&SearchTerm=" + enc(q) +
-        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags,BackdropImageTags,ChildCount" +
+        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags,ChildCount" +
         "&EnableImages=true" +
         "&ImageTypeLimit=1" +
         "&Limit=80"
@@ -146,101 +146,64 @@ source.getHomeCapabilities = function() {
 
 
 /*
- * v10 SERIES NAVIGATION
+ * v12 SERIES HANDLING
  *
- * Series and seasons are represented as Grayjay channels instead of playlists.
- * v9 showed that custom playlist URLs are resolved through Grayjay's playlist
- * client path and therefore did not route back into this source.
+ * Grayjay has a native remote-playlist flow. A Jellyfin series is exposed as
+ * one PlatformPlaylist item in Home/Search. Opening it is handled by
+ * source.isPlaylistUrl/source.getPlaylist, so Grayjay does not send the
+ * jellyfin:// URL to its browser.
  *
- * Channel URLs are explicitly supported by the Grayjay source API:
- *   jellyfin://series/<seriesId>
- *   jellyfin://season/<seasonId>
+ * The first stable version returns all episodes ordered Season -> Episode.
+ * This is intentionally conservative. A true separate Seasons screen needs
+ * either nested playlist UI support or a small Grayjay UI extension, which we
+ * can add after this native playlist path is proven on your build.
  */
 
-source.isChannelUrl = function(url) {
-    return /^jellyfin:\/\/(series|season)\/[A-Za-z0-9-]+$/.test(url || "");
+source.isPlaylistUrl = function(url) {
+    return /^jellyfin:\/\/series\/[A-Za-z0-9-]+$/.test(url || "");
 };
 
-source.getChannel = function(url) {
+source.getPlaylist = function(url) {
     ensureUser();
 
-    const parsed = parseContainerUrl(url);
-    const item = apiJson(
-        "/Users/" + enc(USER.Id) + "/Items/" + enc(parsed.id) +
-        "?Fields=Overview,DateCreated,PremiereDate,ImageTags,BackdropImageTags,IndexNumber,ChildCount"
+    const seriesId = seriesIdFromUrl(url);
+
+    const series = apiJson(
+        "/Users/" + enc(USER.Id) + "/Items/" + enc(seriesId) +
+        "?Fields=Overview,DateCreated,PremiereDate,ImageTags,ChildCount"
     );
 
-    return containerChannel(item, parsed.kind);
-};
-
-source.getChannelCapabilities = function() {
-    return {
-        types: [Type.Feed.Mixed],
-        sorts: [],
-        filters: []
-    };
-};
-
-source.getChannelContents = function(url, type, order, filters, continuationToken) {
-    ensureUser();
-
-    const parsed = parseContainerUrl(url);
-    const start = parseInt(continuationToken || "0");
-    const limit = 100;
-
-    if (parsed.kind === "series") {
-        // Only seasons are exposed here.
-        const data = apiJson(
-            "/Users/" + enc(USER.Id) + "/Items" +
-            "?ParentId=" + enc(parsed.id) +
-            "&Recursive=false" +
-            "&IncludeItemTypes=Season" +
-            "&Fields=Overview,DateCreated,PremiereDate,ImageTags,BackdropImageTags,IndexNumber,ChildCount" +
-            "&EnableImages=true" +
-            "&ImageTypeLimit=1" +
-            "&SortBy=IndexNumber" +
-            "&SortOrder=Ascending" +
-            "&StartIndex=" + start +
-            "&Limit=" + limit
-        );
-
-        const seasons = (data.Items || []).map(function(item) {
-            return seasonFeedItem(item);
-        });
-
-        const total = data.TotalRecordCount || (start + seasons.length);
-        const hasMore = start + seasons.length < total;
-        return new ContentPager(
-            seasons,
-            hasMore,
-            hasMore ? String(start + limit) : null
-        );
-    }
-
-    // A season exposes its episodes as normal playable Grayjay videos.
     const data = apiJson(
         "/Users/" + enc(USER.Id) + "/Items" +
-        "?ParentId=" + enc(parsed.id) +
-        "&Recursive=false" +
+        "?Recursive=true" +
+        "&ParentId=" + enc(seriesId) +
         "&IncludeItemTypes=Episode" +
-        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags,BackdropImageTags" +
+        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags" +
         "&EnableImages=true" +
         "&ImageTypeLimit=1" +
-        "&SortBy=IndexNumber" +
+        "&SortBy=ParentIndexNumber,IndexNumber" +
         "&SortOrder=Ascending" +
-        "&StartIndex=" + start +
-        "&Limit=" + limit
+        "&Limit=10000"
     );
 
     const episodes = (data.Items || []).map(toPlatformVideo);
-    const total = data.TotalRecordCount || (start + episodes.length);
-    const hasMore = start + episodes.length < total;
 
-    return new ContentPager(
-        episodes,
-        hasMore,
-        hasMore ? String(start + limit) : null
-    );
+    return new PlatformPlaylistDetails({
+        id: platformId(seriesId),
+        name: series.Name || "Jellyfin Series",
+        thumbnails: thumbnailsFor(series),
+        author: new PlatformAuthorLink(
+            platformId(seriesId),
+            "Jellyfin",
+            SERVER,
+            primaryImageUrl(series, 256)
+        ),
+        uploadDate: dateSeconds(series.PremiereDate || series.DateCreated),
+        url: "jellyfin://series/" + seriesId,
+        videoCount: episodes.length,
+        thumbnail: primaryImageUrl(series, 960),
+        contents: new ContentPager(episodes, false)
+    });
 };
 
 function toMixedPager(data, start, limit) {
@@ -257,98 +220,38 @@ function toMixedPager(data, start, limit) {
 
 function toMixedContent(item) {
     if (item && item.Type === "Series")
-        return seriesFeedItem(item);
+        return toSeriesPlaylist(item);
 
     return toPlatformVideo(item);
 }
 
-function seriesFeedItem(item) {
+function toSeriesPlaylist(item) {
     const id = String(item && item.Id ? item.Id : "");
-    const title = item && item.Name ? item.Name : "Untitled Series";
-    const seriesUrl = "jellyfin://series/" + id;
 
-    /*
-     * PlatformNestedMediaContent inherits PlatformContent, so Grayjay can
-     * safely place it in Home/Search ContentPagers.
-     *
-     * contentUrl points at our own Jellyfin channel URL. When opened,
-     * Grayjay resolves that URL back through this plugin's isChannelUrl().
-     */
-    return new PlatformNestedMediaContent({
+    return new PlatformPlaylist({
         id: platformId(id),
-        name: title,
+        name: item && item.Name ? item.Name : "Untitled Series",
         thumbnails: thumbnailsFor(item),
         author: new PlatformAuthorLink(
             platformId(id),
             "Jellyfin",
-            seriesUrl,
+            SERVER,
             primaryImageUrl(item, 256)
         ),
         uploadDate: dateSeconds(item.PremiereDate || item.DateCreated),
-        url: seriesUrl,
-        contentUrl: seriesUrl,
-        contentName: title,
-        contentDescription: item && item.Overview ? item.Overview : "",
-        contentProvider: "Jellyfin",
-        contentThumbnails: thumbnailsFor(item)
+        url: "jellyfin://series/" + id,
+        videoCount: item && item.ChildCount ? item.ChildCount : 0,
+        thumbnail: primaryImageUrl(item, 960)
     });
 }
 
-
-function seasonFeedItem(item) {
-    const id = String(item && item.Id ? item.Id : "");
-    const title = item && item.Name ? item.Name : "Season";
-    const seasonUrl = "jellyfin://season/" + id;
-
-    return new PlatformNestedMediaContent({
-        id: platformId(id),
-        name: title,
-        thumbnails: thumbnailsFor(item),
-        author: new PlatformAuthorLink(
-            platformId(id),
-            "Jellyfin",
-            seasonUrl,
-            primaryImageUrl(item, 256)
-        ),
-        uploadDate: dateSeconds(item.PremiereDate || item.DateCreated),
-        url: seasonUrl,
-        contentUrl: seasonUrl,
-        contentName: title,
-        contentDescription: item && item.Overview ? item.Overview : "",
-        contentProvider: "Jellyfin",
-        contentThumbnails: thumbnailsFor(item)
-    });
-}
-
-function containerChannel(item, kind) {
-    const id = String(item && item.Id ? item.Id : "");
-    const name = item && item.Name
-        ? item.Name
-        : (kind === "season" ? "Season" : "Series");
-
-    return new PlatformChannel({
-        id: platformId(id),
-        name: name,
-        thumbnail: primaryImageUrl(item, 640),
-        banner: backdropImageUrl(item, 1280),
-        subscribers: 0,
-        description: item && item.Overview ? item.Overview : "",
-        url: "jellyfin://" + kind + "/" + id,
-        urlAlternatives: [],
-        links: {}
-    });
-}
-
-function parseContainerUrl(url) {
-    const m = /^jellyfin:\/\/(series|season)\/([A-Za-z0-9-]+)$/.exec(url || "");
+function seriesIdFromUrl(url) {
+    const m = /^jellyfin:\/\/series\/([A-Za-z0-9-]+)$/.exec(url || "");
 
     if (!m)
-        throw new ScriptException("Invalid Jellyfin series/season URL.");
+        throw new ScriptException("Invalid Jellyfin series URL.");
 
-    return {
-        kind: m[1],
-        id: m[2]
-    };
+    return m[1];
 }
 
 function primaryImageUrl(item, width) {
@@ -360,17 +263,8 @@ function primaryImageUrl(item, width) {
         : "";
 
     return SERVER + "/Items/" + enc(item.Id) +
-        "/Images/Primary?maxWidth=" + (width || 640) +
+        "/Images/Primary?maxWidth=" + (width || 960) +
         "&quality=90" + tag;
-}
-
-function backdropImageUrl(item, width) {
-    if (!item || !item.Id || !item.BackdropImageTags || item.BackdropImageTags.length === 0)
-        return primaryImageUrl(item, width || 1280);
-
-    return SERVER + "/Items/" + enc(item.Id) +
-        "/Images/Backdrop/0?maxWidth=" + (width || 1280) +
-        "&quality=90&tag=" + enc(item.BackdropImageTags[0]);
 }
 
 function ensureUser() {

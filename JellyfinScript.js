@@ -1,5 +1,5 @@
 /*
- * Jellyfin -> Grayjay experimental source, v7
+ * Jellyfin -> Grayjay experimental source, v9
  *
  * Changes from v6:
  * - Adds Jellyfin Primary images as Grayjay thumbnails.
@@ -35,8 +35,8 @@ source.getHome = function(continuationToken) {
     const data = apiJson(
         "/Users/" + enc(USER.Id) + "/Items" +
         "?Recursive=true" +
-        "&IncludeItemTypes=Movie,Episode" +
-        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags" +
+        "&IncludeItemTypes=Movie,Series" +
+        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags,ChildCount" +
         "&EnableImages=true" +
         "&ImageTypeLimit=1" +
         "&SortBy=DateCreated" +
@@ -45,25 +45,26 @@ source.getHome = function(continuationToken) {
         "&Limit=" + limit
     );
 
-    return toPager(data, start, limit);
+    return toMixedPager(data, start, limit);
 };
 
 source.search = function(query, type, order, filters) {
     ensureUser();
 
     const q = (query || "").trim();
+
     const data = apiJson(
         "/Users/" + enc(USER.Id) + "/Items" +
         "?Recursive=true" +
-        "&IncludeItemTypes=Movie,Episode" +
+        "&IncludeItemTypes=Movie,Series" +
         "&SearchTerm=" + enc(q) +
-        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags" +
+        "&Fields=Overview,DateCreated,PremiereDate,RunTimeTicks,MediaSources,SeriesName,SeriesId,ParentIndexNumber,IndexNumber,ImageTags,ChildCount" +
         "&EnableImages=true" +
         "&ImageTypeLimit=1" +
         "&Limit=80"
     );
 
-    return new ContentPager((data.Items || []).map(toPlatformVideo), false);
+    return new ContentPager((data.Items || []).map(toPlatformContent), false);
 };
 
 source.isContentDetailsUrl = function(url) {
@@ -200,6 +201,57 @@ function thumbnailsFor(item) {
         new Thumbnail(base + "?maxWidth=480&quality=85" + tag, 480),
         new Thumbnail(base + "?maxWidth=960&quality=90" + tag, 960)
     ]);
+}
+
+
+function toMixedPager(data, start, limit) {
+    const items = (data.Items || []).map(toPlatformContent);
+    const total = data.TotalRecordCount || (start + items.length);
+    const hasMore = start + items.length < total;
+
+    return new ContentPager(
+        items,
+        hasMore,
+        hasMore ? String(start + limit) : null
+    );
+}
+
+function toPlatformContent(item) {
+    if (item && item.Type === "Series")
+        return toPlatformSeries(item);
+
+    return toPlatformVideo(item);
+}
+
+function toPlatformSeries(item) {
+    return new PlatformPlaylist({
+        id: platformId(item.Id),
+        name: item.Name || "Untitled Series",
+        thumbnails: thumbnailsFor(item),
+        author: new PlatformAuthorLink(
+            platformId(item.Id),
+            "Jellyfin Series",
+            "jellyfin://series/" + item.Id,
+            ""
+        ),
+        uploadDate: dateSeconds(item.PremiereDate || item.DateCreated),
+        url: "jellyfin://series/" + item.Id,
+        videoCount: item.ChildCount || 0,
+        thumbnail: primaryImageUrl(item, 960)
+    });
+}
+
+function primaryImageUrl(item, width) {
+    if (!item || !item.Id)
+        return "";
+
+    const tag = item.ImageTags && item.ImageTags.Primary
+        ? "&tag=" + enc(item.ImageTags.Primary)
+        : "";
+
+    return SERVER + "/Items/" + enc(item.Id) +
+        "/Images/Primary?maxWidth=" + (width || 960) +
+        "&quality=90" + tag;
 }
 
 function toPager(data, start, limit) {
